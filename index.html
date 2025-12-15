@@ -124,32 +124,34 @@
         return el;
     }
 
-    // posiciones en círculo (simple, estable, bonito)
-    function circleLayout(n, w, h, margin = 60) {
-        const cx = w / 2, cy = h / 2;
-        const r = Math.min(w, h) / 2 - margin;
-        const pos = {};
-        for (let i = 0; i < n; i++) {
-            const ang = (2 * Math.PI * i) / n - Math.PI / 2;
-            pos[i] = { x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang) };
+    function initPositionsIfNeeded() {
+        if (state.pos && Object.keys(state.pos).length === state.n) return;
+
+        const W = Number(svg.getAttribute("width"));
+        const H = Number(svg.getAttribute("height"));
+        const margin = 60;
+
+        const cx = W / 2, cy = H / 2;
+        const r = Math.min(W, H) / 2 - margin;
+
+        state.pos = {};
+        for (let i = 0; i < state.n; i++) {
+            const ang = (2 * Math.PI * i) / state.n - Math.PI / 2;
+            state.pos[i] = { x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang) };
         }
-        return pos;
     }
 
     function drawGraph(graph, highlight = {}) {
-        // highlight: { currentKey, accepted:Set(keys), rejected:Set(keys) }
-        const W = Number(svg.getAttribute("width"));
-        const H = Number(svg.getAttribute("height"));
-        const pos = circleLayout(graph.n, W, H);
+        initPositionsIfNeeded();
+        const pos = state.pos;
 
         svgClear();
 
-        // defs (flechas no, pero sí estilos)
         const accepted = highlight.accepted || new Set();
         const rejected = highlight.rejected || new Set();
         const currentKey = highlight.currentKey || null;
 
-        // dibuja aristas primero
+        // --- aristas ---
         for (const e of graph.edges) {
             const key = edgeKey(e.u, e.v);
             const a = pos[e.u], b = pos[e.v];
@@ -162,22 +164,19 @@
             if (accepted.has(key)) { stroke = "#e53935"; dash = ""; width = 4; }
             if (currentKey === key) { stroke = "#fb8c00"; dash = ""; width = 5; }
 
-            const line = svgEl("line", {
+            svg.appendChild(svgEl("line", {
                 x1: a.x, y1: a.y, x2: b.x, y2: b.y,
-                stroke, "stroke-width": width,
-                "stroke-dasharray": dash
-            });
-            svg.appendChild(line);
+                stroke, "stroke-width": width, "stroke-dasharray": dash
+            }));
 
-            // peso a la mitad
+            // label peso
             const mx = (a.x + b.x) / 2;
             const my = (a.y + b.y) / 2;
 
-            const labelBg = svgEl("rect", {
+            svg.appendChild(svgEl("rect", {
                 x: mx - 12, y: my - 10, width: 24, height: 18,
                 fill: "white", opacity: "0.85", rx: 6, ry: 6
-            });
-            svg.appendChild(labelBg);
+            }));
 
             const text = svgEl("text", {
                 x: mx, y: my + 4,
@@ -189,15 +188,17 @@
             svg.appendChild(text);
         }
 
-        // dibuja nodos encima
+        // --- nodos (con drag) ---
         for (let i = 0; i < graph.n; i++) {
             const p = pos[i];
+
+            // grupo para mover círculo + texto juntos
+            const g = svgEl("g", { "data-node": String(i), style: "cursor: grab;" });
 
             const circle = svgEl("circle", {
                 cx: p.x, cy: p.y, r: 18,
                 fill: "#1e40af", stroke: "#0b1220", "stroke-width": 2
             });
-            svg.appendChild(circle);
 
             const t = svgEl("text", {
                 x: p.x, y: p.y + 5,
@@ -205,11 +206,76 @@
                 "font-size": "14",
                 "font-weight": "700",
                 fill: "white",
-                "font-family": "system-ui"
+                "font-family": "system-ui",
+                "pointer-events": "none"
             });
             t.textContent = nodeLabel(i);
-            svg.appendChild(t);
+
+            g.appendChild(circle);
+            g.appendChild(t);
+            svg.appendChild(g);
+
+            // evento mousedown para iniciar drag
+            g.addEventListener("mousedown", (ev) => onNodeMouseDown(ev, i));
         }
+    }
+
+    let drag = {
+        active: false,
+        node: null,
+        offsetX: 0,
+        offsetY: 0,
+    };
+
+    function svgPointFromMouseEvent(ev) {
+        const rect = svg.getBoundingClientRect();
+        return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
+    }
+
+    function onNodeMouseDown(ev, nodeIndex) {
+        ev.preventDefault();
+
+        initPositionsIfNeeded();
+        const p = svgPointFromMouseEvent(ev);
+        const cur = state.pos[nodeIndex];
+
+        drag.active = true;
+        drag.node = nodeIndex;
+        drag.offsetX = cur.x - p.x;
+        drag.offsetY = cur.y - p.y;
+
+        // estilo
+        const g = ev.currentTarget;
+        g.style.cursor = "grabbing";
+
+        // para que aunque salgas del nodo, siga el drag
+        window.addEventListener("mousemove", onMouseMove);
+        window.addEventListener("mouseup", onMouseUp);
+    }
+
+    function onMouseMove(ev) {
+        if (!drag.active) return;
+
+        const W = Number(svg.getAttribute("width"));
+        const H = Number(svg.getAttribute("height"));
+        const margin = 25; // para que no se vaya fuera del canvas
+
+        const p = svgPointFromMouseEvent(ev);
+        const x = clamp(p.x + drag.offsetX, margin, W - margin);
+        const y = clamp(p.y + drag.offsetY, margin, H - margin);
+
+        state.pos[drag.node] = { x, y };
+
+        // redibuja manteniendo resaltados actuales si estás en Kruskal
+        drawGraph(state, { accepted: acceptedSet, rejected: rejectedSet, currentKey });
+    }
+
+    function onMouseUp() {
+        drag.active = false;
+        drag.node = null;
+
+        window.removeEventListener("mousemove", onMouseMove);
+        window.removeEventListener("mouseup", onMouseUp);
     }
 
     // ---------- Union-Find ----------
@@ -248,11 +314,9 @@
 
     // ---------- State ----------
     const state = {
-      n: 7,
-      edges: [
-        // example:
-        // { u: 0, v: 1, w: 5 }
-      ],
+        n: 7,
+        edges: [],
+        pos: null, // <-- posiciones { 0:{x,y}, 1:{x,y}, ... }
     };
 
     // ---------- DOM ----------
@@ -417,6 +481,7 @@
       }
       state.n = n;
       state.edges = []; // reinicia para evitar inconsistencias
+      state.pos = null;
       renderAll();
     };
 
