@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kruskal Web — Constructor de Grafos</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 24px; max-width: 980px; }
+    h1 { margin-bottom: 8px; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin: 14px 0; }
+    label { display: inline-flex; gap: 8px; align-items: center; }
+    select, input { padding: 8px 10px; border-radius: 10px; border: 1px solid #ccc; }
+    button { padding: 8px 12px; border-radius: 10px; border: 1px solid #bbb; background: #f7f7f7; cursor: pointer; }
+    button:hover { background: #eee; }
+    .edges { display: grid; gap: 10px; margin-top: 10px; }
+    .edge-row { display: grid; grid-template-columns: 140px 140px 140px 90px; gap: 10px; align-items: center; }
+    .pill { display:inline-block; padding: 6px 10px; border-radius: 999px; border: 1px solid #ddd; }
+    .ok { border-color: #2ecc71; }
+    .bad { border-color: #e74c3c; }
+    .muted { color: #666; }
+    .status { display:flex; gap:10px; flex-wrap: wrap; align-items:center; }
+    .error { color:#b00020; margin-top: 8px; white-space: pre-line; }
+    .success { color:#0b6b2d; margin-top: 8px; white-space: pre-line; }
+    .footer { margin-top: 20px; color:#666; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Kruskal Web</h1>
+  <p class="muted">Paso 1: construye tu grafo (A..X). Paso 2 (después): ejecutaremos Kruskal paso a paso.</p>
+
+  <div class="card">
+    <div class="row">
+      <label>
+        Número de nodos (2–24):
+        <input id="nInput" type="number" min="2" max="24" value="7" />
+      </label>
+      <button id="applyN">Aplicar</button>
+      <span class="pill" id="nodesLabel">Nodos: —</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button id="addEdge">Agregar arista</button>
+      <button id="clearEdges">Borrar todas</button>
+    </div>
+
+    <div class="status" style="margin-top:10px">
+      <span class="pill" id="edgesCount">Aristas: 0</span>
+      <span class="pill" id="minEdges">Mínimo requerido: 0</span>
+      <span class="pill" id="connectedPill">Conectado: —</span>
+      <span class="pill" id="validPill">Válido: —</span>
+    </div>
+
+    <div class="edges" id="edgesContainer"></div>
+
+    <div class="error" id="errorBox"></div>
+    <div class="success" id="successBox"></div>
+  </div>
+
+  <div class="card">
+    <button id="continueBtn">Continuar (validar)</button>
+    <div class="muted" style="margin-top:10px">
+      En la siguiente etapa mostraremos el algoritmo Kruskal paso a paso y el MST.
+    </div>
+  </div>
+
+  <div class="footer">
+    Tip: evita aristas duplicadas (A—B y B—A cuentan igual). Pesos: enteros 1..100.
+  </div>
+
+  <script>
+    // ---------- Utils ----------
+    const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+    const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+
+    function nodeLabel(idx) { return ALPHABET[idx]; }
+
+    function edgeKey(u, v) {
+      // undirected canonical key
+      const a = Math.min(u, v), b = Math.max(u, v);
+      return `${a}-${b}`;
+    }
+
+    // ---------- Union-Find ----------
+    class UnionFind {
+      constructor(n) {
+        this.parent = Array.from({ length: n }, (_, i) => i);
+        this.rank = Array(n).fill(0);
+      }
+      find(x) {
+        if (this.parent[x] !== x) this.parent[x] = this.find(this.parent[x]);
+        return this.parent[x];
+      }
+      union(a, b) {
+        let ra = this.find(a), rb = this.find(b);
+        if (ra === rb) return false;
+        if (this.rank[ra] < this.rank[rb]) [ra, rb] = [rb, ra];
+        this.parent[rb] = ra;
+        if (this.rank[ra] === this.rank[rb]) this.rank[ra]++;
+        return true;
+      }
+    }
+
+    function isConnected(n, edges) {
+      if (n <= 1) return true;
+      if (edges.length === 0) return false;
+
+      const uf = new UnionFind(n);
+      for (const e of edges) uf.union(e.u, e.v);
+
+      const root0 = uf.find(0);
+      for (let i = 1; i < n; i++) {
+        if (uf.find(i) !== root0) return false;
+      }
+      return true;
+    }
+
+    // ---------- State ----------
+    const state = {
+      n: 7,
+      edges: [
+        // example:
+        // { u: 0, v: 1, w: 5 }
+      ],
+    };
+
+    // ---------- DOM ----------
+    const nInput = document.getElementById("nInput");
+    const applyN = document.getElementById("applyN");
+    const nodesLabel = document.getElementById("nodesLabel");
+
+    const addEdgeBtn = document.getElementById("addEdge");
+    const clearEdgesBtn = document.getElementById("clearEdges");
+    const edgesContainer = document.getElementById("edgesContainer");
+
+    const edgesCount = document.getElementById("edgesCount");
+    const minEdges = document.getElementById("minEdges");
+    const connectedPill = document.getElementById("connectedPill");
+    const validPill = document.getElementById("validPill");
+
+    const errorBox = document.getElementById("errorBox");
+    const successBox = document.getElementById("successBox");
+
+    const continueBtn = document.getElementById("continueBtn");
+
+    // ---------- Rendering ----------
+    function renderNodesLabel() {
+      const labels = Array.from({ length: state.n }, (_, i) => nodeLabel(i)).join(", ");
+      nodesLabel.textContent = `Nodos: ${labels}`;
+    }
+
+    function makeNodeSelect(value, onChange, forbiddenValue = null) {
+      const sel = document.createElement("select");
+      for (let i = 0; i < state.n; i++) {
+        if (forbiddenValue !== null && i === forbiddenValue) continue;
+        const opt = document.createElement("option");
+        opt.value = String(i);
+        opt.textContent = nodeLabel(i);
+        sel.appendChild(opt);
+      }
+      sel.value = String(value);
+      sel.onchange = () => onChange(Number(sel.value));
+      return sel;
+    }
+
+    function renderEdges() {
+      edgesContainer.innerHTML = "";
+
+      state.edges.forEach((e, idx) => {
+        const row = document.createElement("div");
+        row.className = "edge-row";
+
+        // Node 1 select
+        const uSel = makeNodeSelect(e.u, (newU) => {
+          // if newU would equal v, auto-adjust v
+          e.u = newU;
+          if (e.u === e.v) {
+            e.v = (e.v + 1) % state.n;
+            if (e.v === e.u) e.v = (e.u + 1) % state.n;
+          }
+          renderAll();
+        }, null);
+
+        // Weight input
+        const wInp = document.createElement("input");
+        wInp.type = "number";
+        wInp.min = "1";
+        wInp.max = "100";
+        wInp.step = "1";
+        wInp.value = String(e.w);
+        wInp.oninput = () => {
+          e.w = Number(wInp.value);
+          renderStatus();
+        };
+
+        // Node 2 select (forbidden = current u)
+        const vSel = makeNodeSelect(e.v, (newV) => {
+          e.v = newV;
+          renderAll();
+        }, e.u);
+
+        // Delete
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "Eliminar";
+        delBtn.onclick = () => {
+          state.edges.splice(idx, 1);
+          renderAll();
+        };
+
+        row.appendChild(uSel);
+        row.appendChild(wInp);
+        row.appendChild(vSel);
+        row.appendChild(delBtn);
+
+        edgesContainer.appendChild(row);
+      });
+    }
+
+    function validate() {
+      const errors = [];
+      const n = state.n;
+      const E = state.edges.length;
+
+      // weights and nodes
+      for (let i = 0; i < state.edges.length; i++) {
+        const e = state.edges[i];
+        if (e.u === e.v) errors.push(`Arista #${i+1}: u y v no pueden ser iguales.`);
+        if (!Number.isInteger(e.w) || e.w < 1 || e.w > 100) {
+          errors.push(`Arista #${i+1}: peso inválido (${e.w}). Debe ser entero 1..100.`);
+        }
+        if (e.u < 0 || e.u >= n || e.v < 0 || e.v >= n) {
+          errors.push(`Arista #${i+1}: nodo fuera de rango.`);
+        }
+      }
+
+      // duplicates (undirected)
+      const seen = new Set();
+      for (let i = 0; i < state.edges.length; i++) {
+        const e = state.edges[i];
+        const key = edgeKey(e.u, e.v);
+        if (seen.has(key)) errors.push(`Arista duplicada detectada: ${nodeLabel(Math.min(e.u,e.v))}—${nodeLabel(Math.max(e.u,e.v))}.`);
+        seen.add(key);
+      }
+
+      // minimum edges
+      const minE = n - 1;
+      if (E < minE) errors.push(`El grafo tiene ${E} aristas, pero el mínimo requerido es ${minE} (N-1).`);
+
+      // connectedness
+      const connected = isConnected(n, state.edges);
+      if (!connected) errors.push(`El grafo NO está conectado (hay nodos aislados o componentes separados).`);
+
+      return { ok: errors.length === 0, errors, connected };
+    }
+
+    function renderStatus() {
+      const n = state.n;
+      const E = state.edges.length;
+      edgesCount.textContent = `Aristas: ${E}`;
+      minEdges.textContent = `Mínimo requerido: ${n - 1}`;
+
+      const { ok, errors, connected } = validate();
+
+      connectedPill.textContent = `Conectado: ${connected ? "Sí" : "No"}`;
+      connectedPill.className = "pill " + (connected ? "ok" : "bad");
+
+      validPill.textContent = `Válido: ${ok ? "Sí" : "No"}`;
+      validPill.className = "pill " + (ok ? "ok" : "bad");
+
+      errorBox.textContent = ok ? "" : errors.map(e => "• " + e).join("\n");
+      successBox.textContent = ok ? "✅ Grafo válido. Ya puedes continuar a Kruskal." : "";
+    }
+
+    function renderAll() {
+      renderNodesLabel();
+      renderEdges();
+      renderStatus();
+    }
+
+    // ---------- Actions ----------
+    applyN.onclick = () => {
+      const n = clamp(Number(nInput.value), 2, 24);
+      if (!Number.isInteger(n)) {
+        alert("N debe ser un entero.");
+        return;
+      }
+      state.n = n;
+      state.edges = []; // reinicia para evitar inconsistencias
+      renderAll();
+    };
+
+    addEdgeBtn.onclick = () => {
+      if (state.n < 2) return;
+
+      // default u=0, v=1, weight=1; adjust to avoid equality
+      const u = 0;
+      const v = state.n > 1 ? 1 : 0;
+      state.edges.push({ u, v, w: 1 });
+      renderAll();
+    };
+
+    clearEdgesBtn.onclick = () => {
+      state.edges = [];
+      renderAll();
+    };
+
+    continueBtn.onclick = () => {
+      const { ok, errors } = validate();
+      if (!ok) {
+        alert("No se puede continuar:\n\n" + errors.join("\n"));
+        return;
+      }
+      alert("✅ Listo. En la siguiente etapa ejecutaremos Kruskal paso a paso.");
+    };
+
+    // ---------- Init ----------
+    renderAll();
+  </script>
+</body>
+</html>
