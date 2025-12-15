@@ -67,6 +67,29 @@
     </div>
   </div>
 
+  <div class="card" id="kruskalCard" style="display:none">
+    <h2 style="margin-top:0">Paso 2: Kruskal (paso a paso)</h2>
+
+    <div class="row">
+        <button id="kReset">Reset</button>
+        <button id="kStep">Siguiente paso</button>
+        <button id="kAuto">Auto</button>
+        <button id="kStop" disabled>Stop</button>
+    </div>
+
+    <div class="status" style="margin-top:10px">
+        <span class="pill" id="kEdgeIdx">Arista: -</span>
+        <span class="pill" id="kMstCount">MST: 0</span>
+        <span class="pill" id="kTotal">Total: 0</span>
+        <span class="pill" id="kDone">Estado: -</span>
+    </div>
+
+    <div class="error" id="kError"></div>
+
+    <h3>Log</h3>
+    <pre id="kLog" style="background:#fafafa;border:1px solid #eee;border-radius:12px;padding:12px;max-height:260px;overflow:auto;"></pre>
+  </div>
+
   <div class="footer">
     Tip: evita aristas duplicadas (A—B y B—A cuentan igual). Pesos: enteros 1..100.
   </div>
@@ -313,8 +336,182 @@
         alert("No se puede continuar:\n\n" + errors.join("\n"));
         return;
       }
-      alert("✅ Listo. En la siguiente etapa ejecutaremos Kruskal paso a paso.");
+
+      // mostrar etapa 2
+      kruskalCard.style.display = "block";
+      kStart(state);
+
+      // baja hacia la sección
+      kruskalCard.scrollIntoView({ behavior: "smooth" });
     };
+
+        // ---------- Kruskal Step-by-Step ----------
+    let kState = null;
+    let kTimer = null;
+
+    function kruskalInit(graph) {
+      // graph: { n, edges: [{u,v,w}] }
+      // returns a state machine to step through
+      const edgesSorted = graph.edges
+        .map((e, i) => ({ ...e, _id: i }))
+        .sort((a, b) => a.w - b.w || edgeKey(a.u, a.v).localeCompare(edgeKey(b.u, b.v)));
+
+      const uf = new UnionFind(graph.n);
+
+      return {
+        n: graph.n,
+        edges: edgesSorted,
+        i: 0,
+        mst: [],
+        total: 0,
+        uf,
+        done: false,
+        reason: "",
+      };
+    }
+
+    function kruskalStep(s) {
+      if (s.done) return { type: "done", message: s.reason || "Terminado." };
+
+      // ya tenemos MST completo
+      if (s.mst.length === s.n - 1) {
+        s.done = true;
+        s.reason = "✅ MST completo (N-1 aristas).";
+        return { type: "done", message: s.reason };
+      }
+
+      // ya no hay aristas que revisar
+      if (s.i >= s.edges.length) {
+        s.done = true;
+        s.reason = "⚠️ Se acabaron las aristas antes de completar el MST (¿grafo no conectado?).";
+        return { type: "done", message: s.reason };
+      }
+
+      const e = s.edges[s.i++];
+      const ru = s.uf.find(e.u);
+      const rv = s.uf.find(e.v);
+
+      if (ru !== rv) {
+        s.uf.union(ru, rv);
+        s.mst.push({ u: e.u, v: e.v, w: e.w });
+        s.total += e.w;
+        return {
+          type: "accept",
+          edge: e,
+          message: `ACEPTA ${nodeLabel(e.u)}—${nodeLabel(e.v)} (w=${e.w})`
+        };
+      } else {
+        return {
+          type: "reject",
+          edge: e,
+          message: `RECHAZA ${nodeLabel(e.u)}—${nodeLabel(e.v)} (w=${e.w}) (ciclo)`
+        };
+      }
+    }
+
+    // ---------- Kruskal UI wiring ----------
+    const kruskalCard = document.getElementById("kruskalCard");
+    const kReset = document.getElementById("kReset");
+    const kStep = document.getElementById("kStep");
+    const kAuto = document.getElementById("kAuto");
+    const kStop = document.getElementById("kStop");
+
+    const kEdgeIdx = document.getElementById("kEdgeIdx");
+    const kMstCount = document.getElementById("kMstCount");
+    const kTotal = document.getElementById("kTotal");
+    const kDone = document.getElementById("kDone");
+    const kLog = document.getElementById("kLog");
+    const kError = document.getElementById("kError");
+
+    function kRenderStatus() {
+      if (!kState) return;
+      kEdgeIdx.textContent = `Arista: ${Math.min(kState.i, kState.edges.length)}/${kState.edges.length}`;
+      kMstCount.textContent = `MST: ${kState.mst.length}/${kState.n - 1}`;
+      kTotal.textContent = `Total: ${kState.total}`;
+      kDone.textContent = `Estado: ${kState.done ? "Terminado" : "En proceso"}`;
+      kDone.className = "pill " + (kState.done ? "ok" : "bad");
+    }
+
+    function kLogLine(text) {
+      kLog.textContent += text + "\n";
+      kLog.scrollTop = kLog.scrollHeight;
+    }
+
+    function kStopAuto() {
+      if (kTimer) {
+        clearInterval(kTimer);
+        kTimer = null;
+      }
+      kStop.disabled = true;
+      kAuto.disabled = false;
+    }
+
+    function kStart(graph) {
+      kError.textContent = "";
+      kLog.textContent = "";
+      kState = kruskalInit(graph);
+      kStep.disabled = false;   // 👈 importante
+      kAuto.disabled = false;   // por si quedó deshabilitado
+      kStop.disabled = true;
+      kRenderStatus();
+      kLogLine("Orden de aristas (por peso):");
+      kState.edges.forEach((e, idx) => {
+        kLogLine(`${idx+1}. ${nodeLabel(e.u)}—${nodeLabel(e.v)} w=${e.w}`);
+      });
+      kLogLine("----------------------------------------");
+    }
+
+    function kDoStep() {
+      if (!kState) return;
+      if (kState.done) {
+        // ya terminó: no hagas nada
+        kStep.disabled = true;
+        return;
+      }
+      const ev = kruskalStep(kState);
+      if (ev.type === "accept") {
+        kLogLine("✅ " + ev.message);
+      } else if (ev.type === "reject") {
+        kLogLine("❌ " + ev.message);
+      } else {
+        kLogLine(ev.message);
+      }
+
+      kRenderStatus();
+
+      if (kState.done) {
+        kStopAuto();
+        kStep.disabled = true;
+        kLogLine("----------------------------------------");
+        kLogLine("MST final:");
+        kState.mst.forEach((e) => kLogLine(`${nodeLabel(e.u)}—${nodeLabel(e.v)} w=${e.w}`));
+        kLogLine(`Peso total = ${kState.total}`);
+      }
+    }
+
+    kReset.onclick = () => {
+      kStopAuto();
+      kStart(state);
+    };
+
+    kStep.onclick = () => {
+      kDoStep();
+    };
+
+    kAuto.onclick = () => {
+      if (!kState) return;
+      kAuto.disabled = true;
+      kStop.disabled = false;
+      kTimer = setInterval(() => {
+        if (!kState || kState.done) {
+          kStopAuto();
+          return;
+        }
+        kDoStep();
+      }, 600);
+    };
+
+    kStop.onclick = () => kStopAuto();
 
     // ---------- Init ----------
     renderAll();
